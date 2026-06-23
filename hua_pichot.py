@@ -39,6 +39,13 @@ THRESHOLD_TEMP = 75  # Граница паники в градусах
 CHECK_INTERVAL = 5  # Интервал проверки (в секундах)
 is_running = True
 
+DEVICES_COLOR = {
+    'cpu': (255, 255, 255),
+    'nvidia': (50, 255, 50),
+    'amd': (255, 50, 50)
+}
+
+
 # Настройка уведомления "ХУЯ ПИЧОТ"
 toast = Notification(
     # app_id="Мониторинг CPU",
@@ -297,12 +304,14 @@ def get_max_temp() -> tuple[str, int]:
     (device, temp) = list(sorted(devices_temp.items(), key=lambda i: i[1], reverse=True))[0]
     return (device, temp)
 
-def create_temp_icon(temp):
+type ColorRGB = tuple[int, int, int]
+
+def create_temp_icon(temp, color: ColorRGB=(255, 255, 255)):
     """Динамически создает квадратную иконку 32x32 с числом температуры"""
     img = Image.new("RGBA", (32, 32), color=(0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    text_color = (255, 50, 50) if temp >= THRESHOLD_TEMP else (255, 255, 255)
+    text_color = color
 
     try:
         font = ImageFont.truetype("arial.ttf", 20)
@@ -316,18 +325,13 @@ def create_temp_icon(temp):
     return img
 
 
-def monitor_loop(icon):
-    """Фоновый цикл проверки температуры и обновления иконки"""
+def monitor_loop():
+    """Фоновый цикл проверки температуры"""
     global is_running
     last_notification_time = 0
 
     while is_running:
-
         [device, temp] = get_max_temp()
-
-        icon.icon = create_temp_icon(temp)
-        icon.title = f"Temp {device}: {temp}°C"
-
         if temp >= THRESHOLD_TEMP:
             current_time = time.time()
             if current_time - last_notification_time > 30:
@@ -337,12 +341,16 @@ def monitor_loop(icon):
         time.sleep(CHECK_INTERVAL)
 
 
-def on_exit(icon, item):
+def menu_on_exit(icon, item):
+    """Корректный выход из скрипта"""
+    icon.stop()
+    on_exit()
+
+def on_exit():
     """Корректный выход из скрипта"""
     global is_running
     is_running = False
     computer.Close()  # Освобождаем низкоуровневый драйвер
-    icon.stop()
     os._exit(0)
 
 def check_notify():
@@ -350,21 +358,39 @@ def check_notify():
     (device, temp) = get_max_temp()
     show_corner_alert(temp, device)
 
-def main():
-    print_sensors()
-    initial_temp = get_devices_temp()
-    print(initial_temp)
-
-
+def start_icon_thread(device_name, text_color):
+    # Создаем уникальный объект иконки для конкретного устройства
     icon = pystray.Icon(
-        name="cpu_temp_monitor",
-        icon=create_temp_icon(initial_temp['cpu']),
-        title=f"CPU Temp: {initial_temp['cpu']}°C",
+        name=f"monitor_{device_name}",
+        icon=create_temp_icon(45, text_color),
+        title=f"{device_name}: Ожидание...",
         menu=pystray.Menu(
             pystray.MenuItem("Проверка оповещения", check_notify),
             pystray.MenuItem("Выход", on_exit)
         ),
     )
+
+    # Фоновый цикл, который обновляет ТОЛЬКО ЭТУ иконку
+    def device_loop():
+        while is_running:
+            # Получаем температуру конкретно для device_name (CPU/GPU)
+            temp = get_devices_temp()[device_name]
+
+            icon.icon = create_temp_icon(temp, text_color)
+            icon.title = f"{device_name}: {temp}°C"
+
+            time.sleep(3)
+
+    # Запускаем обновление датчика
+    threading.Thread(target=device_loop, daemon=True).start()
+
+    # Запускаем саму иконку в трее (этот вызов заблокирует текущий поток)
+    icon.run()
+
+def main():
+    print_sensors()
+    initial_temp = get_devices_temp()
+    print(initial_temp)
 
     # toast.msg = f"Текущая температура: {initial_temp}°C! ХУЯ ПИЧОТ!"
     # toast.show()
@@ -372,15 +398,20 @@ def main():
     # Функция, которая выполнится при нажатии Ctrl+C в консоли
     def handle_ctrl_c(signum, frame):
         print("\nПолучен сигнал Ctrl+C. Завершаю работу...")
-        on_exit(icon, None)  # Вызываем ваш готовый корректный выход
+        on_exit()  # Вызываем ваш готовый корректный выход
 
     # Регистрируем перехват Ctrl+C (SIGINT)
     signal.signal(signal.SIGINT, handle_ctrl_c)
 
-    monitor_thread = threading.Thread(target=monitor_loop, args=(icon,))
+    # Запускаем ци
+    for device_name in initial_temp:
+        threading.Thread(
+            target=start_icon_thread, args=(device_name, DEVICES_COLOR[device_name])
+        ).start()
+
+    monitor_thread = threading.Thread(target=monitor_loop)
     monitor_thread.daemon = True
     monitor_thread.start()
-    icon.run()
 
 
 if __name__ == "__main__":
