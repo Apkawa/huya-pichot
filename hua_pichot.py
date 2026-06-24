@@ -35,7 +35,7 @@ except Exception as e:
     sys.exit(1)
 
 # --- НАСТРОЙКИ ---
-THRESHOLD_TEMP = 75  # Граница паники в градусах
+THRESHOLD_TEMP = 78  # Граница паники в градусах
 CHECK_INTERVAL = 5  # Интервал проверки (в секундах)
 is_running = True
 
@@ -69,75 +69,7 @@ import tkinter as tk
 type DeviceTemp = dict[str, int]
 
 
-def show_fullscreen_alert(temp):
-    """Создает полноэкранные красные окна предупреждения на ВСЕХ подключенных дисплеях."""
-    # Создаем базовый корневой процесс Tkinter
-    root = tk.Tk()
-    root.withdraw()  # Скрываем главное невидимое окно
-
-    # Получаем список всех мониторов через системный вызов Windows
-    # Для этого временно задействуем win32api (он уже есть в составе pywin32)
-    import win32api
-
-    monitors = win32api.EnumDisplayMonitors()
-    windows = []
-
-    # Перебираем каждый найденный экран
-    for i, monitor in enumerate(monitors):
-        # Получаем координаты конкретного монитора (лево, верх, право, низ)
-        monitor_info = win32api.GetMonitorInfo(monitor[0])
-        coords = monitor_info["Monitor"]
-
-        x = coords[0]
-        y = coords[1]
-        width = coords[2] - coords[0]
-        height = coords[3] - coords[1]
-
-        # Создаем отдельное окно для этого монитора
-        win = tk.Toplevel(root)
-
-        # Оформление окна: убираем рамки Windows, красим в красный
-        win.overrideredirect(True)
-        win.configure(bg="#CC0000")
-
-        # Делаем окно ПОВЕРХ ВСЕХ ОКОН (даже поверх игр в полноэкранном режиме)
-        win.attributes("-topmost", True)
-
-        # Задаем геометрию окна четко под размеры текущего монитора
-        win.geometry(f"{width}x{height}+{x}+{y}")
-
-        # Добавляем страшный текст по центру
-        label_title = tk.Label(
-            win,
-            text="🔥 ХУЯ ПИЧОТ!!! 🔥",
-            font=("Arial", 46, "bold"),
-            fg="white",
-            bg="#CC0000",
-        )
-        label_title.pack(expand=True, anchor="s", pady=20)
-
-        label_msg = tk.Label(
-            win,
-            text=f"Температура системы: {temp}°C\nПроверь охлаждающую подставку!",
-            font=("Arial", 28, "normal"),
-            fg="#FFFF00",
-            bg="#CC0000",
-        )
-        label_msg.pack(expand=True, anchor="n", pady=20)
-
-        windows.append(win)
-
-    # Функция автоматического закрытия окон через 5 секунд, чтобы не вешать систему
-    def close_all():
-        root.destroy()
-
-    root.after(5000, close_all)
-
-    # Запуск цикла отрисовки окон (заблокирует поток выполнения на 5 секунд)
-    root.mainloop()
-
-
-def show_corner_alert(temp: int, device: str = "cpu"):
+def show_corner_alert(temp: int, device: str = "cpu", delay: int=7):
     """Создает маленькие красные окошки предупреждения в правом нижнем углу КАЖДОГО физического экрана."""
     # Получаем список всех мониторов через системный вызов Windows
     # Для этого временно задействуем win32api (он уже есть в составе pywin32)
@@ -223,7 +155,7 @@ def show_corner_alert(temp: int, device: str = "cpu"):
     blink()
 
     # Закрываем окошки сами через 7 секунд
-    root.after(7000, root.destroy)
+    root.after(delay*1000, root.destroy)
     root.mainloop()
 
 
@@ -306,7 +238,7 @@ def get_max_temp() -> tuple[str, int]:
 
 type ColorRGB = tuple[int, int, int]
 
-def create_temp_icon(temp, color: ColorRGB=(255, 255, 255)):
+def create_temp_icon(temp: str|int, color: ColorRGB=(255, 255, 255)):
     """Динамически создает квадратную иконку 32x32 с числом температуры"""
     img = Image.new("RGBA", (32, 32), color=(0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -333,7 +265,9 @@ def monitor_loop():
     while is_running:
         [device, temp] = get_max_temp()
         if temp >= THRESHOLD_TEMP:
+            print(f"ХУЯ ПИЧОТ! {device}:{temp}°C")
             current_time = time.time()
+            # Показывается каждые 30 секунд
             if current_time - last_notification_time > 30:
                 show_corner_alert(temp, device)
                 last_notification_time = current_time
@@ -354,7 +288,6 @@ def on_exit():
     os._exit(0)
 
 def check_notify():
-
     (device, temp) = get_max_temp()
     show_corner_alert(temp, device)
 
@@ -374,7 +307,11 @@ def start_icon_thread(device_name, text_color):
     def device_loop():
         while is_running:
             # Получаем температуру конкретно для device_name (CPU/GPU)
-            temp = get_devices_temp()[device_name]
+            try:
+                temp = get_devices_temp()[device_name]
+            except KeyError:
+                # Видеокарту выключили, будем ждать когда включат
+                temp = '-'
 
             icon.icon = create_temp_icon(temp, text_color)
             icon.title = f"{device_name}: {temp}°C"
@@ -392,18 +329,15 @@ def main():
     initial_temp = get_devices_temp()
     print(initial_temp)
 
-    # toast.msg = f"Текущая температура: {initial_temp}°C! ХУЯ ПИЧОТ!"
-    # toast.show()
 
-    # Функция, которая выполнится при нажатии Ctrl+C в консоли
     def handle_ctrl_c(signum, frame):
+        # Функция, которая выполнится при нажатии Ctrl+C в консоли
         print("\nПолучен сигнал Ctrl+C. Завершаю работу...")
-        on_exit()  # Вызываем ваш готовый корректный выход
+        on_exit()
 
     # Регистрируем перехват Ctrl+C (SIGINT)
     signal.signal(signal.SIGINT, handle_ctrl_c)
 
-    # Запускаем ци
     for device_name in initial_temp:
         threading.Thread(
             target=start_icon_thread, args=(device_name, DEVICES_COLOR[device_name])
